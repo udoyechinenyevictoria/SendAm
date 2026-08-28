@@ -2,6 +2,16 @@ const { sendSuccess, sendError, sendPaginated } = require('../utils/response');
 const { verifyPassword, createToken } = require('../services/adminAuth.service');
 const prisma = require('../common/prisma');
 const { withIdAliases } = require('../common/records');
+const {
+  adminUserSelect,
+  adminWalletSelect,
+  adminTransactionSelect,
+  adminKycSelect,
+  toAdminUser,
+  toAdminWallet,
+  toAdminTransaction,
+  toAdminKyc,
+} = require('./admin.dto');
 
 // Parse ?page and ?limit into safe bounds so list endpoints can never be asked
 // to load the entire collection at once. Defaults to 50/page, capped at 100.
@@ -66,17 +76,14 @@ const getUsers = async (req, res, next) => {
     const { page, limit, skip } = parsePagination(req.query);
     const [users, total] = await Promise.all([
       prisma.user.findMany({
-        include: { wallets: { select: { chain: true, publicKey: true, network: true, createdAt: true } } },
+        select: adminUserSelect,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
       prisma.user.count(),
     ]);
-    sendPaginated(res, withIdAliases(users.map((user) => ({
-      ...user,
-      pinHash: undefined,
-    }))), { page, limit, total });
+    sendPaginated(res, withIdAliases(users.map(toAdminUser)), { page, limit, total });
   } catch (error) {
     next(error);
   }
@@ -87,18 +94,14 @@ const getWallets = async (req, res, next) => {
     const { page, limit, skip } = parsePagination(req.query);
     const [wallets, total] = await Promise.all([
       prisma.wallet.findMany({
-        include: { user: { select: { phoneNumber: true, whatsappName: true } } },
+        select: adminWalletSelect,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
       prisma.wallet.count(),
     ]);
-    sendPaginated(res, withIdAliases(wallets.map((wallet) => ({
-      ...wallet,
-      encryptedSecretKey: undefined,
-      userId: wallet.user,
-    }))), { page, limit, total });
+    sendPaginated(res, withIdAliases(wallets.map(toAdminWallet)), { page, limit, total });
   } catch (error) {
     next(error);
   }
@@ -109,17 +112,14 @@ const getTransactions = async (req, res, next) => {
     const { page, limit, skip } = parsePagination(req.query);
     const [transactions, total] = await Promise.all([
       prisma.transaction.findMany({
-        include: { user: { select: { phoneNumber: true } } },
+        select: adminTransactionSelect,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
       prisma.transaction.count(),
     ]);
-    sendPaginated(res, withIdAliases(transactions.map((transaction) => ({
-      ...transaction,
-      userId: transaction.user,
-    }))), { page, limit, total });
+    sendPaginated(res, withIdAliases(transactions.map(toAdminTransaction)), { page, limit, total });
   } catch (error) {
     next(error);
   }
@@ -128,13 +128,10 @@ const getTransactions = async (req, res, next) => {
 const getKycProfiles = async (_req, res, next) => {
   try {
     const profiles = await prisma.kycProfile.findMany({
-      include: { user: { select: { phoneNumber: true, whatsappName: true } } },
+      select: adminKycSelect,
       orderBy: { updatedAt: 'desc' },
     });
-    sendSuccess(res, withIdAliases(profiles.map((profile) => ({
-      ...profile,
-      userId: profile.user,
-    }))));
+    sendSuccess(res, withIdAliases(profiles.map(toAdminKyc)));
   } catch (error) {
     next(error);
   }

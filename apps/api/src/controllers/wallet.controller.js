@@ -4,6 +4,7 @@ const walletService = require('../wallet/wallet.service');
 const { validateAddress } = require('../wallet/stellar.adapter');
 const { executePayment } = require('../payment/payment.orchestrator');
 const prisma = require('../common/prisma');
+const { claim, complete, fingerprintRequest } = require('../services/idempotency.service');
 
 const createWallet = async (req, res, next) => {
   try {
@@ -42,6 +43,11 @@ const checkBalance = async (req, res, next) => {
 const sendFunds = async (req, res, next) => {
   try {
     const { phoneNumber, amount, destination } = req.body;
+    const idempotencyKey = req.get('Idempotency-Key');
+
+    if (!idempotencyKey || idempotencyKey.length > 255) {
+      return sendError(res, 'An Idempotency-Key header is required');
+    }
 
     if (!isValidPhoneNumber(phoneNumber) || !isValidAmount(amount) || !destination) {
       return sendError(res, 'A valid phone number, amount, and destination are required');
@@ -53,6 +59,17 @@ const sendFunds = async (req, res, next) => {
     const user = await prisma.user.findUnique({ where: { phoneNumber } });
     if (!user) return sendError(res, 'User not found', 404);
 
+    const idempotency = await claim({
+      userId: user.id,
+      operation: 'wallet.send',
+      key: idempotencyKey,
+      fingerprint: fingerprintRequest(req.body),
+    });
+    if (idempotency.state === 'conflict') return sendError(res, 'Idempotency-Key was already used with different payment details', 409);
+    if (idempotency.state === 'stuck') return sendError(res, 'A previous request with this Idempotency-Key needs reconciliation', 409);
+    if (idempotency.state === 'processing') return sendError(res, 'A payment with this Idempotency-Key is already processing', 409);
+    if (idempotency.state === 'replay') return res.status(200).json(idempotency.record.response);
+
     const result = await executePayment({
       sender: user,
       destination,
@@ -63,12 +80,18 @@ const sendFunds = async (req, res, next) => {
       destinationCountry: req.body.destinationCountry,
     });
 
-    return sendSuccess(res, {
-      transactionId: result.transaction._id,
-      status: result.transaction.status,
-      rail: result.transaction.rail,
-      receipt: result.receipt,
-    }, 'Payment accepted');
+    const response = {
+      success: true,
+      message: 'Payment accepted',
+      data: {
+        transactionId: result.transaction._id,
+        status: result.transaction.status,
+        rail: result.transaction.rail,
+        receipt: result.receipt,
+      },
+    };
+    await complete(idempotency.record.id, response);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
